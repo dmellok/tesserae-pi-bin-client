@@ -29,49 +29,64 @@ Pre-release; tested against the API of `inky==2.4.0`.
 
 ## Install (on the Pi)
 
+One command from a fresh Raspberry Pi OS Bookworm image. Run it **as your
+normal user** (not via sudo — the script invokes sudo internally where needed):
+
 ```bash
-# OS prerequisites
-sudo apt update
-sudo apt install -y python3-venv python3-pip git
-sudo raspi-config nonint do_spi 0     # enable SPI
-
-# Required group membership for the inky lib
-sudo usermod -aG gpio,spi "$USER"
-# log out and back in for groups to take effect
-
-# Clone and install
 git clone https://github.com/dmellok/tesserae-pi-bin-client.git
 cd tesserae-pi-bin-client
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-# Smoke-test the hardware: paints a six-colour stripe pattern, no MQTT needed.
-tesserae-pi-bin-client --paint-test
+./scripts/install.sh
 ```
 
-On first run the daemon writes a default config to
-`~/.config/tesserae-pi-bin-client/config.toml`. Edit the `[mqtt]` host to point
-at your broker, then start it:
+That handles, in order:
+
+1. `apt-get install` build + runtime prerequisites
+2. `raspi-config nonint do_spi 0` — enable SPI
+3. `usermod -aG gpio,spi $USER` — group membership for HAT access
+4. `python3 -m venv .venv` + `pip install -e .` — pulls the pinned `inky[rpi]`
+5. Materialises the default config at `~/.config/tesserae-pi-bin-client/config.toml`
+6. Symlinks the venv binary to `/usr/local/bin/tesserae-pi-bin-client`
+7. Installs + enables + starts the systemd unit
+
+After it finishes:
 
 ```bash
-tesserae-pi-bin-client
-```
-
-### systemd service
-
-Once `tesserae-pi-bin-client` is on `PATH` (e.g. via `pip install .` system-wide,
-or by symlinking from your venv into `/usr/local/bin`):
-
-```bash
-sudo ./scripts/install-service.sh           # uses $SUDO_USER
-sudo ./scripts/install-service.sh pi        # explicit user
+# If groups were just added, log out + back in (or reboot) first.
+nano ~/.config/tesserae-pi-bin-client/config.toml      # set [mqtt].host etc.
+sudo systemctl restart tesserae-pi-bin-client
 sudo journalctl -u tesserae-pi-bin-client -f
 ```
 
-The unit runs as the user you specify and grants them `gpio` and `spi`
-supplementary groups. It restarts on failure with a 5-second delay and logs to
-the journal.
+To verify the hardware path without involving MQTT, run the stripe test:
+
+```bash
+tesserae-pi-bin-client --paint-test     # paints six vertical colour bands
+```
+
+### `install.sh` flags
+
+```
+--no-service     stop after step 6; don't install the systemd unit
+--paint-test     run --paint-test at the end (only useful if you didn't
+                 just get added to gpio/spi)
+--skip-apt       skip apt update + install (assume packages are present)
+--user USER      user the systemd unit runs as (default: $USER)
+```
+
+The script is idempotent — re-run it after `git pull` to upgrade the package
+and re-install the unit.
+
+### Just the systemd unit
+
+If you've already installed the package some other way and you only want to
+(re-)install the unit:
+
+```bash
+sudo ./scripts/install-service.sh "$USER"
+```
+
+This expects `tesserae-pi-bin-client` to already be on `PATH` at
+`/usr/local/bin/tesserae-pi-bin-client`.
 
 ## Configuration
 
