@@ -12,8 +12,13 @@ requires-python = ">=3.11"
 authors = [{ name = "Tesserae" }]
 dependencies = [
     "paho-mqtt>=2.0,<3",
-    # PINNED — paint.py reaches into a private inky internal (_update).
-    # Bumping this requires re-validating against paint.py on real hardware.
+    # paint.py builds the (rows, cols) palette-index array that inky.show()
+    # expects. inky already pulls numpy transitively; we list it explicitly
+    # since we import it directly.
+    "numpy>=1.24",
+    # PINNED — paint.py knows the shape of inky's panel.buf and counts on
+    # show() handling per-driver orientation + dual-controller plumbing.
+    # Bumping this requires re-running --paint-test on real hardware.
     "inky[rpi]==2.4.0",
 ]
 
