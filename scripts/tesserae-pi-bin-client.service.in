@@ -1,0 +1,18 @@
+[Unit]
+Description=Tesserae Pi .bin client (Inky Impression)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+SupplementaryGroups=gpio spi
+ExecStart=/usr/local/bin/tesserae-pi-bin-client
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
