@@ -146,6 +146,8 @@ else
         python3 \
         python3-venv \
         python3-pip \
+        python3-dev \
+        build-essential \
         libopenjp2-7 \
         libtiff6
 fi
