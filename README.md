@@ -44,18 +44,25 @@ That handles, in order:
 2. `raspi-config nonint do_spi 0` — enable SPI
 3. `usermod -aG gpio,spi $USER` — group membership for HAT access
 4. `python3 -m venv .venv` + `pip install -e .` — pulls the pinned `inky[rpi]`
-5. Materialises the default config at `~/.config/tesserae-pi-bin-client/config.toml`
+5. **Prompts** for MQTT host/port/credentials/client id and panel model, then
+   writes `~/.config/tesserae-pi-bin-client/config.toml` (mode 0600). If a
+   config already exists it's left alone — pass `--reconfigure` to overwrite,
+   or `--non-interactive` to write defaults without prompting.
 6. Symlinks the venv binary to `/usr/local/bin/tesserae-pi-bin-client`
 7. Installs + enables + starts the systemd unit
 
-After it finishes:
+After it finishes (the service is already running with your config):
 
 ```bash
 # If groups were just added, log out + back in (or reboot) first.
-nano ~/.config/tesserae-pi-bin-client/config.toml      # set [mqtt].host etc.
-sudo systemctl restart tesserae-pi-bin-client
+sudo systemctl status tesserae-pi-bin-client
 sudo journalctl -u tesserae-pi-bin-client -f
 ```
+
+To change MQTT/panel settings later, edit
+`~/.config/tesserae-pi-bin-client/config.toml` and
+`sudo systemctl restart tesserae-pi-bin-client`, or re-run
+`./scripts/install.sh --reconfigure`.
 
 To verify the hardware path without involving MQTT, run the stripe test:
 
@@ -66,11 +73,13 @@ tesserae-pi-bin-client --paint-test     # paints six vertical colour bands
 ### `install.sh` flags
 
 ```
---no-service     stop after step 6; don't install the systemd unit
---paint-test     run --paint-test at the end (only useful if you didn't
-                 just get added to gpio/spi)
---skip-apt       skip apt update + install (assume packages are present)
---user USER      user the systemd unit runs as (default: $USER)
+--no-service        don't install the systemd unit
+--paint-test        run --paint-test at the end (only useful if you didn't
+                    just get added to gpio/spi)
+--skip-apt          skip apt update + install (assume packages are present)
+--non-interactive   never prompt — write a default config if none exists
+--reconfigure       re-prompt for MQTT/panel values and overwrite the config
+--user USER         user the systemd unit runs as (default: $USER)
 ```
 
 The script is idempotent — re-run it after `git pull` to upgrade the package

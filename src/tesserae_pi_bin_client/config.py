@@ -9,25 +9,54 @@ from .panels import is_valid_model
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tesserae-pi-bin-client" / "config.toml"
 
-DEFAULT_TOML = """\
-[mqtt]
-host = "192.168.1.10"
-port = 1883
-username = ""
-password = ""
-client_id = "pi-impression-1"
-keepalive = 60
 
-[panel]
-model = "inky_13_3"  # inky_4 | inky_5_7 | inky_7_3 | inky_13_3
+def _toml_str(value: str) -> str:
+    """Render a TOML basic-string literal with the bare-minimum escaping."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
-[http]
-download_timeout_s = 30
-max_frame_bytes = 16000000
 
-[logging]
-level = "INFO"
-"""
+def render_config_toml(
+    mqtt_host: str = "192.168.1.10",
+    mqtt_port: int = 1883,
+    mqtt_username: str = "",
+    mqtt_password: str = "",
+    mqtt_client_id: str = "pi-impression-1",
+    mqtt_keepalive: int = 60,
+    panel_model: str = "inky_13_3",
+    download_timeout_s: int = 30,
+    max_frame_bytes: int = 16_000_000,
+    log_level: str = "INFO",
+) -> str:
+    """Build a config.toml body from arbitrary overrides.
+
+    Used by install.sh (via `python -m tesserae_pi_bin_client.bootstrap_config`)
+    when the user is prompted for MQTT and panel values during first-time
+    setup. Calling with no arguments yields the same defaults as DEFAULT_TOML.
+    """
+    return (
+        "[mqtt]\n"
+        f"host = {_toml_str(mqtt_host)}\n"
+        f"port = {mqtt_port}\n"
+        f"username = {_toml_str(mqtt_username)}\n"
+        f"password = {_toml_str(mqtt_password)}\n"
+        f"client_id = {_toml_str(mqtt_client_id)}\n"
+        f"keepalive = {mqtt_keepalive}\n"
+        "\n"
+        "[panel]\n"
+        f"model = {_toml_str(panel_model)}"
+        "  # inky_4 | inky_5_7 | inky_7_3 | inky_13_3\n"
+        "\n"
+        "[http]\n"
+        f"download_timeout_s = {download_timeout_s}\n"
+        f"max_frame_bytes = {max_frame_bytes}\n"
+        "\n"
+        "[logging]\n"
+        f"level = {_toml_str(log_level)}\n"
+    )
+
+
+DEFAULT_TOML = render_config_toml()
 
 
 @dataclass(frozen=True)

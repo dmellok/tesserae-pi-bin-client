@@ -9,6 +9,7 @@ from tesserae_pi_bin_client.config import (
     Config,
     load_config,
     parse_toml,
+    render_config_toml,
 )
 
 
@@ -68,3 +69,42 @@ def test_overrides_take_effect() -> None:
     cfg = parse_toml(bad)
     assert cfg.mqtt.host == "broker.local"
     assert cfg.mqtt.port == 8883
+
+
+# --- render_config_toml -------------------------------------------------------
+
+
+def test_render_no_args_matches_default() -> None:
+    # DEFAULT_TOML is just render_config_toml(); they must agree.
+    assert render_config_toml() == DEFAULT_TOML
+
+
+def test_render_overrides_round_trip() -> None:
+    body = render_config_toml(
+        mqtt_host="broker.lan",
+        mqtt_port=8883,
+        mqtt_username="alice",
+        mqtt_password="hunter2",
+        mqtt_client_id="kitchen-display",
+        panel_model="inky_7_3",
+    )
+    cfg = parse_toml(body)
+    assert cfg.mqtt.host == "broker.lan"
+    assert cfg.mqtt.port == 8883
+    assert cfg.mqtt.username == "alice"
+    assert cfg.mqtt.password == "hunter2"
+    assert cfg.mqtt.client_id == "kitchen-display"
+    assert cfg.panel.model == "inky_7_3"
+
+
+def test_render_escapes_quote_in_string_value() -> None:
+    # A password containing a double quote must still produce valid TOML.
+    body = render_config_toml(mqtt_password='abc"def')
+    cfg = parse_toml(body)
+    assert cfg.mqtt.password == 'abc"def'
+
+
+def test_render_escapes_backslash_in_string_value() -> None:
+    body = render_config_toml(mqtt_password=r"a\b")
+    cfg = parse_toml(body)
+    assert cfg.mqtt.password == r"a\b"
