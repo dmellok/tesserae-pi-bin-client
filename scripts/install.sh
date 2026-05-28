@@ -192,6 +192,15 @@ collect_config_via_prompts() {
     echo "==> MQTT and panel configuration"
     echo "    Press Enter at any prompt to accept the default in brackets."
     echo
+    echo "    A device id identifies this Pi to the Tesserae server."
+    echo "    Use 'pi' if this is your only Pi display; pick something"
+    echo "    like 'pi_kitchen' if you're running more than one."
+    prompt_default device_id       "Device id"          "pi"
+    # Client-side sanity check; the parser also enforces this regex.
+    if ! [[ "$device_id" =~ ^[a-z][a-z0-9_-]{1,31}$ ]]; then
+        echo "    invalid device id; falling back to 'pi'" >&2
+        device_id="pi"
+    fi
     prompt_default mqtt_host       "MQTT broker host"   "192.168.1.10"
     prompt_default mqtt_port       "MQTT broker port"   "1883"
     prompt_default mqtt_username   "MQTT username (blank for anonymous)" ""
@@ -217,6 +226,7 @@ write_config() {
         T_MQTT_USERNAME="${mqtt_username:-}" \
         T_MQTT_PASSWORD="${mqtt_password:-}" \
         T_MQTT_CLIENT_ID="${mqtt_client_id:-}" \
+        T_DEVICE_ID="${device_id:-}" \
         T_PANEL_MODEL="${panel_model:-}" \
         T_OVERWRITE="$1" \
         "$VENV_DIR/bin/python" -m tesserae_pi_bin_client.bootstrap_config

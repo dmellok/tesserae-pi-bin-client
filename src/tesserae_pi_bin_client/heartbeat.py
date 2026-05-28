@@ -8,9 +8,17 @@ from typing import Any, Protocol
 
 from . import __version__
 
-STATUS_TOPIC = "tesserae/pi/status"
+# Default-prefix topic kept around for tests that want to assert against
+# the back-compat shape. Production callers MUST derive their topic from
+# config via status_topic(device_id) — main.py wires this through.
+STATUS_TOPIC_LEGACY = "tesserae/pi/status"
 OFFLINE_WILL_PAYLOAD = json.dumps({"state": "offline"}).encode("utf-8")
 HEARTBEAT_INTERVAL_S = 60.0
+
+
+def status_topic(device_id: str) -> str:
+    """Build the per-device retained-status topic."""
+    return f"tesserae/{device_id}/status"
 
 
 class Publisher(Protocol):
@@ -60,13 +68,13 @@ class Heartbeat:
         self,
         status: Status,
         publisher: Publisher,
+        status_topic: str,
         interval: float = HEARTBEAT_INTERVAL_S,
-        topic: str = STATUS_TOPIC,
     ) -> None:
         self._status = status
         self._publisher = publisher
         self._interval = interval
-        self._topic = topic
+        self._topic = status_topic
         self._stop_event = threading.Event()
         self._kick_event = threading.Event()
         self._lock = threading.Lock()
@@ -123,12 +131,13 @@ def status_summary(status: Status) -> str:
 
 # Re-export dataclass helpers for tests
 __all__ = [
-    "STATUS_TOPIC",
+    "STATUS_TOPIC_LEGACY",
     "OFFLINE_WILL_PAYLOAD",
     "HEARTBEAT_INTERVAL_S",
     "Status",
     "Heartbeat",
     "Publisher",
     "status_summary",
+    "status_topic",
     "asdict",
 ]

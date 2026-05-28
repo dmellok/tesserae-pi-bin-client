@@ -18,6 +18,7 @@ def test_default_toml_parses() -> None:
     assert isinstance(cfg, Config)
     assert cfg.mqtt.host == "192.168.1.10"
     assert cfg.mqtt.port == 1883
+    assert cfg.mqtt.device_id == "pi"
     assert cfg.panel.model == "inky_13_3"
     assert cfg.http.download_timeout_s == 30
     assert cfg.http.max_frame_bytes == 16_000_000
@@ -108,3 +109,41 @@ def test_render_escapes_backslash_in_string_value() -> None:
     body = render_config_toml(mqtt_password=r"a\b")
     cfg = parse_toml(body)
     assert cfg.mqtt.password == r"a\b"
+
+
+# --- device_id ----------------------------------------------------------------
+
+
+def test_render_custom_device_id_round_trips() -> None:
+    body = render_config_toml(device_id="pi_kitchen")
+    cfg = parse_toml(body)
+    assert cfg.mqtt.device_id == "pi_kitchen"
+
+
+def test_missing_device_id_defaults_to_pi() -> None:
+    # Existing installs predate the device_id field — the parser must accept
+    # a config that omits it and fall back to "pi" so the back-compat topic
+    # prefix is preserved.
+    body = "\n".join(
+        line for line in DEFAULT_TOML.splitlines() if "device_id" not in line
+    ) + "\n"
+    cfg = parse_toml(body)
+    assert cfg.mqtt.device_id == "pi"
+
+
+def test_invalid_device_id_rejected() -> None:
+    bad = DEFAULT_TOML.replace('device_id = "pi"', 'device_id = "Pi-Kitchen"')
+    with pytest.raises(ValueError, match="device_id"):
+        parse_toml(bad)
+
+
+def test_too_short_device_id_rejected() -> None:
+    bad = DEFAULT_TOML.replace('device_id = "pi"', 'device_id = "a"')
+    with pytest.raises(ValueError, match="device_id"):
+        parse_toml(bad)
+
+
+def test_device_id_starting_with_digit_rejected() -> None:
+    bad = DEFAULT_TOML.replace('device_id = "pi"', 'device_id = "1pi"')
+    with pytest.raises(ValueError, match="device_id"):
+        parse_toml(bad)

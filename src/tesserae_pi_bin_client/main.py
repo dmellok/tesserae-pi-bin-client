@@ -11,8 +11,8 @@ from typing import Any
 
 from . import __version__
 from .config import DEFAULT_CONFIG_PATH, Config, load_config
-from .heartbeat import Heartbeat, Status
-from .mqtt_loop import FrameDispatcher, MessageHandler, make_mqtt_loop
+from .heartbeat import Heartbeat, Status, status_topic
+from .mqtt_loop import FrameDispatcher, MessageHandler, frame_topic, make_mqtt_loop
 from .paint import auto_panel, detected_model_or, paint
 from .panels import PANEL_DIMS, buffer_size
 from .unpack import pack
@@ -68,6 +68,9 @@ def _do_run(config: Config) -> int:
     panel = auto_panel()
     status.panel = detected_model_or(panel, config.panel.model)
 
+    resolved_frame_topic = frame_topic(config.mqtt.device_id)
+    resolved_status_topic = status_topic(config.mqtt.device_id)
+
     def paint_fn(packed: bytes, model: str) -> None:
         paint(panel, packed, model)
 
@@ -86,12 +89,26 @@ def _do_run(config: Config) -> int:
                 return None
             return client.publish(topic, payload, qos=qos, retain=retain)
 
-    heartbeat = Heartbeat(status=status, publisher=_ClientPublisher())
+    heartbeat = Heartbeat(
+        status=status,
+        publisher=_ClientPublisher(),
+        status_topic=resolved_status_topic,
+    )
     dispatcher = FrameDispatcher(
         config=config, paint_fn=paint_fn, status=status, heartbeat=heartbeat
     )
-    handler = MessageHandler(dispatcher=dispatcher, status=status, heartbeat=heartbeat)
-    client = make_mqtt_loop(config=config, handler=handler)
+    handler = MessageHandler(
+        dispatcher=dispatcher,
+        status=status,
+        heartbeat=heartbeat,
+        frame_topic=resolved_frame_topic,
+    )
+    client = make_mqtt_loop(
+        config=config,
+        handler=handler,
+        frame_topic=resolved_frame_topic,
+        status_topic=resolved_status_topic,
+    )
     client_holder["client"] = client
 
     shutdown = threading.Event()

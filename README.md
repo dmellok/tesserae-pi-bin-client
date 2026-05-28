@@ -108,6 +108,7 @@ port = 1883
 username = ""        # optional
 password = ""        # optional
 client_id = "pi-impression-1"
+device_id = "pi"     # MQTT topic prefix — tesserae/<device_id>/...
 keepalive = 60
 
 [panel]
@@ -125,9 +126,14 @@ Pass `--config /path/to/config.toml` to override.
 
 ## MQTT contract
 
+Every topic is namespaced by the `device_id` from `[mqtt]` — defaults to
+`pi` so single-device installs match the original behaviour, but each
+physical display can have its own id (e.g. `pi_kitchen`) so multiple
+Pis share one broker without colliding.
+
 ### Subscribes
 
-Topic `tesserae/pi/frame/bin`, payload (not retained):
+Topic `tesserae/<device_id>/frame/bin`, payload (not retained):
 
 ```json
 { "url": "http://192.168.1.10:8000/renders/<digest>.bin" }
@@ -138,7 +144,7 @@ The client downloads the URL, validates the byte count matches
 
 ### Publishes (retained)
 
-Topic `tesserae/pi/status`:
+Topic `tesserae/<device_id>/status`:
 
 ```json
 {
@@ -219,8 +225,9 @@ or a real broker.
 - **Panel stays blank, no logs.** Is the daemon running? `systemctl status
   tesserae-pi-bin-client`. Check `journalctl -u tesserae-pi-bin-client`.
 - **Daemon connects but never paints.** Confirm the broker is reachable from
-  the Pi (`mosquitto_sub -h <host> -t 'tesserae/pi/frame/bin'`). Confirm the
-  URL in a message is reachable from the Pi (`curl -I <url>`).
+  the Pi (`mosquitto_sub -h <host> -t 'tesserae/<device_id>/frame/bin'`, or
+  `'tesserae/#'` to watch every device). Confirm the URL in a message is
+  reachable from the Pi (`curl -I <url>`).
 - **"frame is N bytes; expected M" errors.** The configured `panel.model`
   doesn't match the panel that Tesserae is rendering for. Make them agree.
 - **Permission errors opening SPI.** The user running the daemon needs

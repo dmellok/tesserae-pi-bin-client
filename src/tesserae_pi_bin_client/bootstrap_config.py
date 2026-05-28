@@ -13,6 +13,7 @@ Env vars (all optional — unset means "use the default"):
     T_MQTT_USERNAME
     T_MQTT_PASSWORD
     T_MQTT_CLIENT_ID
+    T_DEVICE_ID          MQTT topic prefix (default "pi"); see config.DEVICE_ID_RE
     T_PANEL_MODEL
     T_OVERWRITE          "1" to overwrite an existing file; otherwise abort
 """
@@ -55,6 +56,7 @@ def main() -> int:
         ("T_MQTT_USERNAME", "mqtt_username"),
         ("T_MQTT_PASSWORD", "mqtt_password"),
         ("T_MQTT_CLIENT_ID", "mqtt_client_id"),
+        ("T_DEVICE_ID", "device_id"),
         ("T_PANEL_MODEL", "panel_model"),
     ]:
         val = _env_str(env_name)

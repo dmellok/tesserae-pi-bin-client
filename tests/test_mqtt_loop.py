@@ -12,22 +12,34 @@ from tesserae_pi_bin_client.config import (
     MqttConfig,
     PanelConfig,
 )
-from tesserae_pi_bin_client.heartbeat import Heartbeat, Status
+from tesserae_pi_bin_client.heartbeat import (
+    STATUS_TOPIC_LEGACY,
+    Heartbeat,
+    Status,
+    status_topic,
+)
 from tesserae_pi_bin_client.mqtt_loop import (
-    FRAME_TOPIC,
+    FRAME_TOPIC_LEGACY,
     FrameDispatcher,
     FrameRequest,
     MessageHandler,
+    frame_topic,
     make_mqtt_loop,
     parse_frame_payload,
 )
 from tesserae_pi_bin_client.panels import buffer_size
 
 
-def _config(model: str = "inky_4") -> Config:
+def _config(model: str = "inky_4", device_id: str = "pi") -> Config:
     return Config(
         mqtt=MqttConfig(
-            host="h", port=1883, username="", password="", client_id="cid", keepalive=60
+            host="h",
+            port=1883,
+            username="",
+            password="",
+            client_id="cid",
+            keepalive=60,
+            device_id=device_id,
         ),
         panel=PanelConfig(model=model),
         http=HttpConfig(download_timeout_s=5, max_frame_bytes=10_000_000),
@@ -101,15 +113,20 @@ def test_parse_rejects_non_http_scheme() -> None:
 # --- MessageHandler -------------------------------------------------------------
 
 
-def _handler_pair() -> tuple[MessageHandler, CapturingDispatcher, Status, FakePublisher]:
+def _handler_pair(
+    topic: str = FRAME_TOPIC_LEGACY,
+) -> tuple[MessageHandler, CapturingDispatcher, Status, FakePublisher]:
     status = Status(panel="inky_4")
     publisher = FakePublisher()
-    heartbeat = Heartbeat(status=status, publisher=publisher)
+    heartbeat = Heartbeat(
+        status=status, publisher=publisher, status_topic=STATUS_TOPIC_LEGACY
+    )
     dispatcher = CapturingDispatcher()
     handler = MessageHandler(
         dispatcher=dispatcher,  # type: ignore[arg-type]
         status=status,
         heartbeat=heartbeat,
+        frame_topic=topic,
     )
     return handler, dispatcher, status, publisher
 
@@ -117,15 +134,26 @@ def _handler_pair() -> tuple[MessageHandler, CapturingDispatcher, Status, FakePu
 def test_handler_dispatches_valid_payload() -> None:
     handler, dispatcher, status, _ = _handler_pair()
     raw = json.dumps({"url": "http://h/renders/abc123.bin"}).encode()
-    handler.handle(FRAME_TOPIC, raw)
+    handler.handle(FRAME_TOPIC_LEGACY, raw)
     assert len(dispatcher.submitted) == 1
     assert status.state == "idle"
     assert status.last_error is None
 
 
+def test_handler_dispatches_on_custom_prefix() -> None:
+    custom = frame_topic("pi_kitchen")
+    handler, dispatcher, _status, _ = _handler_pair(topic=custom)
+    raw = json.dumps({"url": "http://h/renders/abc123.bin"}).encode()
+    handler.handle(custom, raw)
+    assert len(dispatcher.submitted) == 1
+    # Default-prefix message must be ignored when configured for a custom id.
+    handler.handle(FRAME_TOPIC_LEGACY, raw)
+    assert len(dispatcher.submitted) == 1
+
+
 def test_handler_records_error_on_bad_payload() -> None:
     handler, dispatcher, status, _ = _handler_pair()
-    handler.handle(FRAME_TOPIC, b"not json")
+    handler.handle(FRAME_TOPIC_LEGACY, b"not json")
     assert dispatcher.submitted == []
     assert status.state == "error"
     assert status.last_error is not None
@@ -158,7 +186,9 @@ def test_dispatcher_paints_valid_buffer() -> None:
 
     status = Status(panel="inky_4")
     publisher = FakePublisher()
-    heartbeat = Heartbeat(status=status, publisher=publisher)
+    heartbeat = Heartbeat(
+        status=status, publisher=publisher, status_topic=STATUS_TOPIC_LEGACY
+    )
     dispatcher = FrameDispatcher(
         config=cfg,
         paint_fn=fake_paint,
@@ -187,7 +217,9 @@ def test_dispatcher_rejects_wrong_sized_download() -> None:
         paint_calls.append((packed, model))
 
     status = Status(panel="inky_4")
-    heartbeat = Heartbeat(status=status, publisher=FakePublisher())
+    heartbeat = Heartbeat(
+        status=status, publisher=FakePublisher(), status_topic=STATUS_TOPIC_LEGACY
+    )
     dispatcher = FrameDispatcher(
         config=cfg,
         paint_fn=fake_paint,
@@ -216,7 +248,9 @@ def test_dispatcher_skips_duplicate_digest() -> None:
         pass
 
     status = Status(panel="inky_4")
-    heartbeat = Heartbeat(status=status, publisher=FakePublisher())
+    heartbeat = Heartbeat(
+        status=status, publisher=FakePublisher(), status_topic=STATUS_TOPIC_LEGACY
+    )
     dispatcher = FrameDispatcher(
         config=cfg,
         paint_fn=fake_paint,
@@ -239,7 +273,9 @@ def test_dispatcher_records_download_failure() -> None:
         raise TimeoutError("server unreachable")
 
     status = Status(panel="inky_4")
-    heartbeat = Heartbeat(status=status, publisher=FakePublisher())
+    heartbeat = Heartbeat(
+        status=status, publisher=FakePublisher(), status_topic=STATUS_TOPIC_LEGACY
+    )
     dispatcher = FrameDispatcher(
         config=cfg,
         paint_fn=lambda p, m: None,
@@ -282,24 +318,66 @@ class FakeMqttClient:
         self.subscribed.append((topic, qos))
 
 
-def test_make_mqtt_loop_sets_lwt_and_backoff() -> None:
+def test_make_mqtt_loop_sets_lwt_and_backoff_legacy_prefix() -> None:
     cfg = _config("inky_4")
     status = Status(panel="inky_4")
-    heartbeat = Heartbeat(status=status, publisher=FakePublisher())
+    heartbeat = Heartbeat(
+        status=status, publisher=FakePublisher(), status_topic=STATUS_TOPIC_LEGACY
+    )
     handler = MessageHandler(
         dispatcher=CapturingDispatcher(),  # type: ignore[arg-type]
         status=status,
         heartbeat=heartbeat,
+        frame_topic=FRAME_TOPIC_LEGACY,
     )
     fake_client = FakeMqttClient("cid")
-    client = make_mqtt_loop(cfg, handler, client_factory=lambda cid: fake_client)
+    client = make_mqtt_loop(
+        cfg,
+        handler,
+        frame_topic=FRAME_TOPIC_LEGACY,
+        status_topic=STATUS_TOPIC_LEGACY,
+        client_factory=lambda cid: fake_client,
+    )
     assert client is fake_client
     assert fake_client.will is not None
     topic, payload, qos, retain = fake_client.will
-    assert topic == "tesserae/pi/status"
+    assert topic == STATUS_TOPIC_LEGACY == "tesserae/pi/status"
     assert qos == 1 and retain is True
     assert json.loads(payload.decode())["state"] == "offline"
     assert fake_client.backoff == (1.0, 60.0)
     # on_connect should subscribe to the frame topic at QoS 1.
     fake_client.on_connect(fake_client, None, None, 0, None)
-    assert (FRAME_TOPIC, 1) in fake_client.subscribed
+    assert (FRAME_TOPIC_LEGACY, 1) in fake_client.subscribed
+
+
+def test_frame_topic_builds_per_device_topic() -> None:
+    assert frame_topic("pi") == FRAME_TOPIC_LEGACY
+    assert frame_topic("pi_kitchen") == "tesserae/pi_kitchen/frame/bin"
+
+
+def test_make_mqtt_loop_uses_custom_prefix() -> None:
+    cfg = _config("inky_4", device_id="pi_kitchen")
+    status = Status(panel="inky_4")
+    custom_status = status_topic(cfg.mqtt.device_id)
+    custom_frame = frame_topic(cfg.mqtt.device_id)
+    heartbeat = Heartbeat(
+        status=status, publisher=FakePublisher(), status_topic=custom_status
+    )
+    handler = MessageHandler(
+        dispatcher=CapturingDispatcher(),  # type: ignore[arg-type]
+        status=status,
+        heartbeat=heartbeat,
+        frame_topic=custom_frame,
+    )
+    fake_client = FakeMqttClient("cid")
+    make_mqtt_loop(
+        cfg,
+        handler,
+        frame_topic=custom_frame,
+        status_topic=custom_status,
+        client_factory=lambda cid: fake_client,
+    )
+    assert fake_client.will is not None
+    assert fake_client.will[0] == "tesserae/pi_kitchen/status"
+    fake_client.on_connect(fake_client, None, None, 0, None)
+    assert ("tesserae/pi_kitchen/frame/bin", 1) in fake_client.subscribed
