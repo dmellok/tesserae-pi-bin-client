@@ -9,7 +9,9 @@
 #
 # What it does, idempotently:
 #   1. apt-get install build + runtime prerequisites
-#   2. raspi-config nonint do_spi 0   (enable SPI bus)
+#   2. raspi-config do_spi 0 + do_i2c 0, and dtoverlay=spi0-0cs in config.txt
+#      (SPI bus for pixel data, I2C for the HAT EEPROM auto-detect reads, and
+#       freeing GPIO7/8 so inky can drive chip-select in software)
 #   3. usermod -aG gpio,spi $USER     (group membership for HAT access)
 #   4. python3 -m venv .venv          (in the repo directory)
 #   5. .venv/bin/pip install -e .     (project + inky[rpi])
@@ -152,12 +154,50 @@ else
         libtiff6
 fi
 
-# ----- 2. SPI -----
-if $is_rpi && command -v raspi-config >/dev/null 2>&1; then
-    echo "==> enabling SPI via raspi-config"
-    sudo raspi-config nonint do_spi 0
+# ----- 2. SPI + I2C + chip-select overlay -----
+needs_reboot=false
+# SPI carries pixel data to the panel; I2C is how inky.auto() reads the HAT
+# ID EEPROM to identify the board (without it: "No EEPROM detected! You must
+# manually initialise your Inky board"). The spi0-0cs overlay tells the kernel
+# SPI driver to claim ZERO hardware chip-select pins, freeing GPIO7/8 so inky
+# can drive CS in software — without it inky aborts at paint time with
+# "Chip Select: (line 8, GPIO8) currently claimed by spi0 CS0".
+if $is_rpi; then
+    if command -v raspi-config >/dev/null 2>&1; then
+        # get_spi/get_i2c echo 1 when disabled, 0 when enabled — only flip
+        # (and flag a reboot) when actually needed so re-runs stay quiet.
+        if [[ "$(sudo raspi-config nonint get_spi 2>/dev/null || echo 1)" == "1" ]]; then
+            echo "==> enabling SPI via raspi-config"
+            sudo raspi-config nonint do_spi 0
+            needs_reboot=true
+        else
+            echo "==> SPI already enabled"
+        fi
+        if [[ "$(sudo raspi-config nonint get_i2c 2>/dev/null || echo 1)" == "1" ]]; then
+            echo "==> enabling I2C via raspi-config (needed for HAT EEPROM detection)"
+            sudo raspi-config nonint do_i2c 0
+            needs_reboot=true
+        else
+            echo "==> I2C already enabled"
+        fi
+    else
+        echo "==> raspi-config not found; enable SPI + I2C yourself"
+    fi
+    boot_config=/boot/firmware/config.txt
+    [[ -f "$boot_config" ]] || boot_config=/boot/config.txt
+    if [[ -f "$boot_config" ]]; then
+        if grep -q '^dtoverlay=spi0-0cs' "$boot_config"; then
+            echo "==> spi0-0cs overlay already present in $boot_config"
+        else
+            echo "==> adding 'dtoverlay=spi0-0cs' to $boot_config (frees CS pin for inky)"
+            echo 'dtoverlay=spi0-0cs' | sudo tee -a "$boot_config" >/dev/null
+            needs_reboot=true
+        fi
+    else
+        echo "==> no boot config.txt found; add 'dtoverlay=spi0-0cs' yourself"
+    fi
 else
-    echo "==> skipping SPI enable (no raspi-config / not on a Pi)"
+    echo "==> skipping SPI/I2C/overlay setup (not on a Pi)"
 fi
 
 # ----- 3. groups -----
@@ -268,9 +308,10 @@ fi
 
 # ----- 9. optional paint test -----
 if $RUN_PAINT_TEST; then
-    if $needs_relogin; then
-        echo "==> NOT running --paint-test — gpio/spi groups were just added"
-        echo "    and won't take effect until you log out + back in."
+    if $needs_relogin || $needs_reboot; then
+        echo "==> NOT running --paint-test — SPI/I2C and/or gpio/spi group"
+        echo "    membership were just changed and won't take effect until you"
+        echo "    reboot (or at least log out + back in)."
     else
         echo "==> running --paint-test"
         "$VENV_DIR/bin/tesserae-pi-bin-client" --paint-test || \
@@ -288,7 +329,13 @@ if $config_existed_before && ! $RECONFIGURE; then
     echo "           (existing file kept; re-run with --reconfigure to change)"
 fi
 echo
-if $needs_relogin; then
+if $needs_reboot; then
+    echo "  REBOOT:  SPI and/or I2C were just enabled — REBOOT NOW so the panel"
+    echo "           can be auto-detected:  sudo reboot"
+    echo "           (the service is enabled and will start cleanly after boot;"
+    echo "           before rebooting it fails with 'No EEPROM detected'.)"
+    echo
+elif $needs_relogin; then
     echo "  groups:  $USER was added to gpio/spi — LOG OUT + BACK IN (or reboot)"
     echo "           before running --paint-test or relying on the service."
     echo

@@ -44,12 +44,38 @@ def _stripe_test_pattern(model: str) -> bytes:
     return pack(pixels, width, height)
 
 
+def _detect_panel() -> Any:
+    """Open the inky panel, raising a clear error if SPI/I2C/HAT is misconfigured.
+
+    Even though the panel size is configured in config.toml, we still need a
+    live inky instance to paint with, and inky.auto() reads the HAT EEPROM over
+    I2C to build it. The most common bring-up failure is I2C being disabled.
+    """
+    try:
+        return auto_panel()
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            "could not open inky panel: "
+            f"{type(exc).__name__}: {exc}\n"
+            "Troubleshooting:\n"
+            "  1. enable BOTH interfaces: raspi-config -> Interface Options ->\n"
+            "     SPI -> enable, and I2C -> enable. I2C is how the HAT EEPROM is\n"
+            "     read; without it you get 'No EEPROM detected'.\n"
+            "  2. reboot after enabling SPI/I2C, then check the EEPROM is visible:\n"
+            "     ls /dev/i2c-1 && sudo i2cdetect -y 1   (expect '50' in the grid)\n"
+            "  3. the user running the service must be in the 'gpio' and 'spi'\n"
+            "     groups (re-run scripts/install.sh, then log out + back in)\n"
+            "  4. if i2cdetect shows no '50', the board has no readable EEPROM and\n"
+            "     inky.auto() cannot identify it (some Impression/Spectra units)"
+        ) from exc
+
+
 def _do_paint_test(config: Config) -> int:
     model = config.panel.model
     expected = buffer_size(model)
     log.info("building stripe pattern for %s (%d bytes)", model, expected)
     buf = _stripe_test_pattern(model)
-    panel = auto_panel()
+    panel = _detect_panel()
     detected = detected_model_or(panel, model)
     if detected != model:
         log.warning(
@@ -65,7 +91,7 @@ def _do_paint_test(config: Config) -> int:
 
 def _do_run(config: Config) -> int:
     status = Status(panel=config.panel.model)
-    panel = auto_panel()
+    panel = _detect_panel()
     status.panel = detected_model_or(panel, config.panel.model)
     # PANEL_DIMS[name] is (W, H) in the orientation Tesserae renders into and
     # the orientation inky.show() consumes after applying the per-driver

@@ -41,7 +41,10 @@ cd tesserae-pi-bin-client
 That handles, in order:
 
 1. `apt-get install` build + runtime prerequisites
-2. `raspi-config nonint do_spi 0` — enable SPI
+2. `raspi-config nonint do_spi 0` + `do_i2c 0` and `dtoverlay=spi0-0cs` in
+   `config.txt` — enable SPI (pixels) and I2C (HAT EEPROM auto-detect), and
+   free GPIO7/8 so `inky` can drive chip-select in software. Enabling either
+   interface or adding the overlay flags a **reboot** at the end.
 3. `usermod -aG gpio,spi $USER` — group membership for HAT access
 4. `python3 -m venv .venv` + `pip install -e .` — pulls the pinned `inky[rpi]`
 5. **Prompts** for MQTT host/port/credentials/client id and panel model, then
@@ -222,6 +225,25 @@ or a real broker.
 
 ## Troubleshooting
 
+- **`could not open inky panel` / `No EEPROM detected! You must manually
+  initialise your Inky board`.** I2C is disabled. The HAT stores its panel ID
+  in an EEPROM that `inky.auto()` reads over **I2C** (not SPI), so SPI alone
+  isn't enough. Enable both and reboot:
+  `sudo raspi-config nonint do_spi 0 && sudo raspi-config nonint do_i2c 0 && sudo reboot`
+  (re-running `./scripts/install.sh` does this for you). After reboot, confirm
+  the EEPROM is visible: `ls /dev/i2c-1 && sudo i2cdetect -y 1` — expect `50`
+  in the grid. If there's no `50`, the board has no readable EEPROM (some
+  Impression/Spectra units) and auto-detect can't identify it.
+- **`Woah there, some pins we need are in use!` / `Chip Select: (line 8,
+  GPIO8) currently claimed by spi0 CS0`.** The panel is detected but paint
+  fails: the kernel SPI driver reserves GPIO8 as hardware CS0, while recent
+  `inky` drives chip-select in software. Free the pin with the zero-chip-select
+  overlay, then reboot (the installer adds this line automatically):
+  ```bash
+  CONFIG=/boot/firmware/config.txt; [ -f "$CONFIG" ] || CONFIG=/boot/config.txt
+  grep -q '^dtoverlay=spi0-0cs' "$CONFIG" || echo 'dtoverlay=spi0-0cs' | sudo tee -a "$CONFIG"
+  sudo reboot
+  ```
 - **Panel stays blank, no logs.** Is the daemon running? `systemctl status
   tesserae-pi-bin-client`. Check `journalctl -u tesserae-pi-bin-client`.
 - **Daemon connects but never paints.** Confirm the broker is reachable from
