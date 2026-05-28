@@ -11,7 +11,7 @@ from typing import Any
 
 from . import __version__
 from .config import DEFAULT_CONFIG_PATH, Config, load_config
-from .heartbeat import Heartbeat, Status, status_topic
+from .heartbeat import Heartbeat, Status, _primary_ip, status_topic
 from .mqtt_loop import FrameDispatcher, MessageHandler, frame_topic, make_mqtt_loop
 from .paint import auto_panel, detected_model_or, paint
 from .panels import PANEL_DIMS, buffer_size
@@ -67,6 +67,13 @@ def _do_run(config: Config) -> int:
     status = Status(panel=config.panel.model)
     panel = auto_panel()
     status.panel = detected_model_or(panel, config.panel.model)
+    # PANEL_DIMS[name] is (W, H) in the orientation Tesserae renders into and
+    # the orientation inky.show() consumes after applying the per-driver
+    # rotation — i.e. what the user actually sees on the panel. Surface those
+    # in the heartbeat so the server's one-click Register pre-fills correctly.
+    status.panel_w, status.panel_h = PANEL_DIMS[status.panel]
+    # Resolved once at startup — neither value changes between heartbeats.
+    status.ip = _primary_ip()
 
     resolved_frame_topic = frame_topic(config.mqtt.device_id)
     resolved_status_topic = status_topic(config.mqtt.device_id)

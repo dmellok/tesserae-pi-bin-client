@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Protocol
-
-from . import __version__
 
 # Default-prefix topic kept around for tests that want to assert against
 # the back-compat shape. Production callers MUST derive their topic from
@@ -15,10 +15,40 @@ STATUS_TOPIC_LEGACY = "tesserae/pi/status"
 OFFLINE_WILL_PAYLOAD = json.dumps({"state": "offline"}).encode("utf-8")
 HEARTBEAT_INTERVAL_S = 60.0
 
+# Discovery hint Tesserae's Settings → Devices uses to pre-fill the kind chip
+# when this client publishes from an unregistered device id.
+KIND = "pi_bin_client"
+
 
 def status_topic(device_id: str) -> str:
     """Build the per-device retained-status topic."""
     return f"tesserae/{device_id}/status"
+
+
+def _fw_version() -> str:
+    """Resolve the installed package version, or a sentinel if not installed."""
+    try:
+        return version("tesserae-pi-bin-client")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
+def _primary_ip() -> str:
+    """Best-effort: the IP the OS would use for an outbound packet.
+
+    Opens a UDP socket against a well-known address — no packets are
+    actually sent; the kernel just resolves the source IP for the route.
+    Returns empty string if no network is configured.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return str(s.getsockname()[0])
+        finally:
+            s.close()
+    except OSError:
+        return ""
 
 
 class Publisher(Protocol):
@@ -35,6 +65,14 @@ class Status:
     last_digest: str | None = None
     panel: str = "unknown"
     started_at: float = field(default_factory=time.time)
+    # Discovery fields read by Tesserae's Settings → Devices to pre-fill the
+    # one-click Register form. Tesserae merges these with whatever it already
+    # knows about the device id, so extra keys here are forward-compatible.
+    kind: str = KIND
+    panel_w: int = 0
+    panel_h: int = 0
+    fw_version: str = field(default_factory=_fw_version)
+    ip: str = ""
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -43,8 +81,12 @@ class Status:
             "last_error": self.last_error,
             "last_digest": self.last_digest,
             "uptime_s": time.time() - self.started_at,
-            "fw_version": __version__,
+            "fw_version": self.fw_version,
             "panel": self.panel,
+            "kind": self.kind,
+            "panel_w": self.panel_w,
+            "panel_h": self.panel_h,
+            "ip": self.ip,
         }
 
     def to_json(self) -> bytes:
@@ -131,6 +173,7 @@ def status_summary(status: Status) -> str:
 
 # Re-export dataclass helpers for tests
 __all__ = [
+    "KIND",
     "STATUS_TOPIC_LEGACY",
     "OFFLINE_WILL_PAYLOAD",
     "HEARTBEAT_INTERVAL_S",

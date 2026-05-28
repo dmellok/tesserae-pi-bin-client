@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from tesserae_pi_bin_client.heartbeat import (
+    KIND,
     OFFLINE_WILL_PAYLOAD,
     STATUS_TOPIC_LEGACY,
     Heartbeat,
@@ -86,3 +87,19 @@ def test_status_payload_includes_required_fields() -> None:
         assert key in payload
     assert payload["panel"] == "inky_13_3"
     assert payload["last_digest"] == "abcd"
+
+
+def test_status_payload_includes_discovery_fields() -> None:
+    # Drives Tesserae's Settings → Devices one-click Register pre-fill.
+    status = Status(
+        panel="inky_13_3", panel_w=1600, panel_h=1200, ip="192.168.1.42"
+    )
+    raw = status.to_json()
+    parsed = json.loads(raw.decode())
+    assert parsed["kind"] == KIND == "pi_bin_client"
+    assert parsed["panel_w"] == 1600
+    assert parsed["panel_h"] == 1200
+    assert parsed["ip"] == "192.168.1.42"
+    # fw_version is populated by the default_factory; must be non-empty so
+    # the server doesn't show a blank firmware chip on the discovered row.
+    assert isinstance(parsed["fw_version"], str) and parsed["fw_version"]
