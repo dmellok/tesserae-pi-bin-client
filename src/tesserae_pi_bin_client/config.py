@@ -29,7 +29,7 @@ def render_config_toml(
     mqtt_password: str = "",
     mqtt_client_id: str = "pi-impression-1",
     mqtt_keepalive: int = 60,
-    device_id: str = "pi",
+    device_id: str = "pi_bin",
     panel_model: str = "inky_13_3",
     download_timeout_s: int = 30,
     max_frame_bytes: int = 16_000_000,
@@ -76,7 +76,7 @@ class MqttConfig:
     password: str
     client_id: str
     keepalive: int
-    device_id: str = "pi"
+    device_id: str = "pi_bin"
 
 
 @dataclass(frozen=True)
@@ -118,9 +118,13 @@ def _parse(raw: dict[str, Any]) -> Config:
     mqtt_section = raw.get("mqtt", {})
     if not isinstance(mqtt_section, dict):
         raise ValueError("[mqtt] must be a table")
-    # device_id is optional in config.toml — existing installs that pre-date
-    # the multi-head topic split default to "pi" so they keep working.
-    device_id = mqtt_section.get("device_id", "pi")
+    # device_id is optional in config.toml. It defaults to "pi_bin" to match
+    # the Tesserae server's pi_bin_client topic prefix (tesserae/pi_bin/...).
+    # An existing config that omits the line now resolves to "pi_bin" too —
+    # the intended migration after the server split pi_client into
+    # pi_bin_client / pi_png_client. Set device_id = "pi" explicitly to keep
+    # the legacy tesserae/pi/... prefix.
+    device_id = mqtt_section.get("device_id", "pi_bin")
     if not isinstance(device_id, str):
         raise ValueError(
             f"[mqtt].device_id must be str, got {type(device_id).__name__}"

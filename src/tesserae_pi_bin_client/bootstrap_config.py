@@ -13,7 +13,7 @@ Env vars (all optional — unset means "use the default"):
     T_MQTT_USERNAME
     T_MQTT_PASSWORD
     T_MQTT_CLIENT_ID
-    T_DEVICE_ID          MQTT topic prefix (default "pi"); see config.DEVICE_ID_RE
+    T_DEVICE_ID          MQTT topic prefix (default "pi_bin"); see config.DEVICE_ID_RE
     T_PANEL_MODEL
     T_OVERWRITE          "1" to overwrite an existing file; otherwise abort
 """

@@ -232,14 +232,15 @@ collect_config_via_prompts() {
     echo "==> MQTT and panel configuration"
     echo "    Press Enter at any prompt to accept the default in brackets."
     echo
-    echo "    A device id identifies this Pi to the Tesserae server."
-    echo "    Use 'pi' if this is your only Pi display; pick something"
-    echo "    like 'pi_kitchen' if you're running more than one."
-    prompt_default device_id       "Device id"          "pi"
+    echo "    A device id identifies this Pi to the Tesserae server and sets"
+    echo "    the MQTT topic prefix (tesserae/<device_id>/...). The default"
+    echo "    'pi_bin' matches the server's pi_bin_client kind; pick something"
+    echo "    like 'pi_bin_kitchen' if you're running more than one .bin Pi."
+    prompt_default device_id       "Device id"          "pi_bin"
     # Client-side sanity check; the parser also enforces this regex.
     if ! [[ "$device_id" =~ ^[a-z][a-z0-9_-]{1,31}$ ]]; then
-        echo "    invalid device id; falling back to 'pi'" >&2
-        device_id="pi"
+        echo "    invalid device id; falling back to 'pi_bin'" >&2
+        device_id="pi_bin"
     fi
     prompt_default mqtt_host       "MQTT broker host"   "192.168.1.10"
     prompt_default mqtt_port       "MQTT broker port"   "1883"

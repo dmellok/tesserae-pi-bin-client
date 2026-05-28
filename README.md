@@ -111,7 +111,7 @@ port = 1883
 username = ""        # optional
 password = ""        # optional
 client_id = "pi-impression-1"
-device_id = "pi"     # MQTT topic prefix — tesserae/<device_id>/...
+device_id = "pi_bin" # MQTT topic prefix — tesserae/<device_id>/...
 keepalive = 60
 
 [panel]
@@ -130,9 +130,17 @@ Pass `--config /path/to/config.toml` to override.
 ## MQTT contract
 
 Every topic is namespaced by the `device_id` from `[mqtt]` — defaults to
-`pi` so single-device installs match the original behaviour, but each
-physical display can have its own id (e.g. `pi_kitchen`) so multiple
-Pis share one broker without colliding.
+`pi_bin`, which is the prefix the Tesserae server's `pi_bin_client` device
+kind publishes on (`tesserae/pi_bin/frame/bin`). Give each physical display
+its own id (e.g. `pi_bin_kitchen`) so multiple Pis can share one broker
+without colliding.
+
+> **Migration note.** This default was `pi` before the Tesserae server split
+> its old `pi_client` kind into `pi_bin_client` / `pi_png_client`. An existing
+> `config.toml` with no `device_id` line now resolves to `pi_bin` (not `pi`),
+> which is the intended change so a fresh install talks to the server out of
+> the box. To keep the legacy `tesserae/pi/...` prefix, set `device_id = "pi"`
+> explicitly in `[mqtt]`.
 
 ### Subscribes
 
