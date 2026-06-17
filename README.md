@@ -268,7 +268,7 @@ or a real broker.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+AGPL-3.0-or-later — see [LICENSE](LICENSE).
 
 [Tesserae]: https://github.com/dmellok/tesserae
 [Inky Impression]: https://shop.pimoroni.com/products/inky-impression
