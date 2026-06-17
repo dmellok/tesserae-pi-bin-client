@@ -7,7 +7,7 @@ name = "tesserae-pi-bin-client"
 version = "0.1.0"
 description = "Raspberry Pi daemon that subscribes to a Tesserae server over MQTT and paints 4-bpp .bin frames onto an Inky Impression."
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11"
 authors = [{ name = "Tesserae" }]
 dependencies = [
