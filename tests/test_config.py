@@ -156,11 +156,13 @@ def test_device_id_starting_with_digit_rejected() -> None:
 # --- transport_mode + [rest] section ------------------------------------------
 
 
-def test_default_transport_mode_is_mqtt() -> None:
+def test_default_transport_mode_is_rest() -> None:
+    # REST is the new default for fresh installs — the install prompt also
+    # picks it. Existing configs that predate the key still fall back to
+    # MQTT via the parser fallback; see test_missing_transport_mode_*.
     cfg = parse_toml(DEFAULT_TOML)
-    assert cfg.transport_mode == "mqtt"
-    # Empty defaults make the [rest] section harmless until user opts in.
-    assert cfg.rest.server_url == ""
+    assert cfg.transport_mode == "rest"
+    assert cfg.rest.server_url == "http://tesserae.local:8765"
     assert cfg.rest.device_token == ""
     assert cfg.rest.pairing_code == ""
     assert cfg.rest.last_frame_etag == ""
@@ -169,27 +171,31 @@ def test_default_transport_mode_is_mqtt() -> None:
 
 def test_unknown_transport_mode_rejected() -> None:
     bad = DEFAULT_TOML.replace(
-        'transport_mode = "mqtt"', 'transport_mode = "carrier-pigeon"'
+        'transport_mode = "rest"', 'transport_mode = "carrier-pigeon"'
     )
     with pytest.raises(ValueError, match="transport_mode"):
         parse_toml(bad)
 
 
 def test_rest_mode_requires_server_url() -> None:
-    bad = DEFAULT_TOML.replace('transport_mode = "mqtt"', 'transport_mode = "rest"')
+    # DEFAULT_TOML already has rest mode with a placeholder server_url —
+    # strip the value to trigger the missing-url validation.
+    bad = DEFAULT_TOML.replace(
+        'server_url = "http://tesserae.local:8765"', 'server_url = ""'
+    )
     with pytest.raises(ValueError, match="server_url"):
         parse_toml(bad)
 
 
-def test_rest_mode_with_server_url_parses() -> None:
+def test_rest_mode_with_custom_server_url_parses() -> None:
     body = render_config_toml(
         transport_mode="rest",
-        rest_server_url="http://tesserae.local:8765",
+        rest_server_url="http://192.168.1.20:8765",
         rest_pairing_code="ABC123",
     )
     cfg = parse_toml(body)
     assert cfg.transport_mode == "rest"
-    assert cfg.rest.server_url == "http://tesserae.local:8765"
+    assert cfg.rest.server_url == "http://192.168.1.20:8765"
     assert cfg.rest.pairing_code == "ABC123"
 
 
@@ -199,6 +205,12 @@ def test_missing_transport_mode_defaults_to_mqtt() -> None:
     body = "\n".join(
         line for line in DEFAULT_TOML.splitlines() if "transport_mode" not in line
     ) + "\n"
+    cfg = parse_toml(body)
+    assert cfg.transport_mode == "mqtt"
+
+
+def test_mqtt_mode_explicit_still_works() -> None:
+    body = render_config_toml(transport_mode="mqtt")
     cfg = parse_toml(body)
     assert cfg.transport_mode == "mqtt"
 
