@@ -47,10 +47,12 @@ That handles, in order:
    interface or adding the overlay flags a **reboot** at the end.
 3. `usermod -aG gpio,spi $USER` — group membership for HAT access
 4. `python3 -m venv .venv` + `pip install -e .` — pulls the pinned `inky[rpi]`
-5. **Prompts** for MQTT host/port/credentials/client id and panel model, then
-   writes `~/.config/tesserae-pi-bin-client/config.toml` (mode 0600). If a
-   config already exists it's left alone — pass `--reconfigure` to overwrite,
-   or `--non-interactive` to write defaults without prompting.
+5. **Prompts** for transport (`rest` default — just the Tesserae server URL
+   — or `mqtt` for an existing broker setup), device id, transport-specific
+   fields, and panel model, then writes
+   `~/.config/tesserae-pi-bin-client/config.toml` (mode 0600). If a config
+   already exists it's left alone — pass `--reconfigure` to overwrite, or
+   `--non-interactive` to write defaults without prompting.
 6. Symlinks the venv binary to `/usr/local/bin/tesserae-pi-bin-client`
 7. Installs + enables + starts the systemd unit
 
@@ -105,7 +107,7 @@ This expects `tesserae-pi-bin-client` to already be on `PATH` at
 Defaults live at `~/.config/tesserae-pi-bin-client/config.toml`:
 
 ```toml
-transport_mode = "mqtt"  # mqtt | rest
+transport_mode = "rest"  # mqtt | rest
 
 [mqtt]
 host = "192.168.1.10"
@@ -113,11 +115,11 @@ port = 1883
 username = ""        # optional
 password = ""        # optional
 client_id = "pi-impression-1"
-device_id = "pi_bin" # MQTT topic prefix — tesserae/<device_id>/...
+device_id = "pi_bin" # device id (URL path + MQTT topic prefix — tesserae/<device_id>/...)
 keepalive = 60
 
 [rest]
-server_url = ""           # e.g. http://tesserae.local:8765 (rest mode only)
+server_url = "http://tesserae.local:8765"
 device_token = ""         # auto-populated after pair/discover
 pairing_code = ""         # single-use; wiped after first successful register
 last_frame_etag = ""      # auto-populated for If-None-Match short-circuit
@@ -140,41 +142,50 @@ Pass `--config /path/to/config.toml` to override.
 
 The client speaks one of two transports, selected by `transport_mode`:
 
-- **`mqtt`** (default) — subscribes to a broker and reacts to retained frame
+- **`rest`** (default for fresh installs) — polls the Tesserae server's
+  `/api/v1/` directly. No broker needed; one round-trip per wake cycle
+  (`GET /frame` + `POST /status`). Out of the box the wake cadence is
+  **every 60 s**; the server's `/status` response can push a different
+  `next_poll_s` per cycle or a durable `config.sleep_interval_s`, both
+  clamped to `[30s, 7d]`.
+- **`mqtt`** — subscribes to a broker and reacts to retained frame
   announcements. Stays connected; pushes are near-instant. Requires a
   broker on the LAN.
-- **`rest`** — polls the Tesserae server's `/api/v1/` directly. No broker
-  needed; one round-trip per wake cycle (`GET /frame` + `POST /status`).
-  The server's response sets the next sleep interval, so wake cadence
-  follows the active composition.
 
-Switching mode is a config-file edit + `sudo systemctl restart tesserae-pi-bin-client`.
-Existing `config.toml` files without `transport_mode` continue to default
-to `mqtt`.
+The installer prompts for transport at the top and only asks for the
+relevant fields (REST → server URL + optional pairing code; MQTT →
+broker host/port/credentials/client id).
 
-### REST mode setup
+Switching mode later is a config-file edit + `sudo systemctl restart
+tesserae-pi-bin-client`. **Existing `config.toml` files** without
+`transport_mode` continue to default to **`mqtt`** (no surprise mode
+switch on upgrade); only fresh installs get the new REST default.
 
-1. Edit `~/.config/tesserae-pi-bin-client/config.toml`:
-   ```toml
-   transport_mode = "rest"
-   [rest]
-   server_url = "http://tesserae.local:8765"
-   ```
-2. **Recommended path (zero typing on the device):** start the daemon
-   and click **Register** on the discovered row in the server's
-   Settings → Devices page. The daemon's next `POST /device/discover`
-   claims the token by MAC match; you'll see "registered via discover"
-   in the journal.
-3. **Strict path (per-device admin approval):** generate a 6-digit
-   pairing code in Settings → Devices, then either:
-   - put it in `[rest].pairing_code` in `config.toml`, or
-   - pass it once via the CLI:
-     ```bash
-     tesserae-pi-bin-client --pair 123456
-     ```
-   `--pair` overrides whatever is in the config for this run only. The
-   code is single-use; after a successful register the daemon wipes it
-   and saves the issued `device_token`.
+### REST mode setup (default install)
+
+When the installer asks for transport, hit Enter to accept `rest`,
+then either:
+
+1. **Recommended path (zero typing on the device):** start the daemon
+   with no pairing code and click **Register** on the discovered row in
+   the server's Settings → Devices page. The daemon's next
+   `POST /device/discover` claims the token by MAC match; you'll see
+   "registered via discover" in the journal.
+2. **Strict path (per-device admin approval):** generate a 6-digit
+   pairing code in Settings → Devices and enter it at the installer's
+   pairing-code prompt. The code is single-use; after a successful
+   register the daemon wipes it and saves the issued `device_token`.
+
+To re-pair after the fact (e.g. token was revoked, or the local
+`device_token` got wiped), generate a fresh code and run once with the
+CLI override:
+
+```bash
+tesserae-pi-bin-client --pair 123456
+```
+
+`--pair` overrides whatever is in `[rest].pairing_code` for that run
+only and is no-op'd if a `device_token` is already saved.
 
 If a 401 ever comes back from the server (token revoked or wiped from
 the server side), the daemon clears the local `device_token` and exits.
