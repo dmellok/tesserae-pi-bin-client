@@ -7,9 +7,13 @@ import pytest
 from tesserae_pi_bin_client.config import (
     DEFAULT_TOML,
     Config,
+    RestConfig,
     load_config,
     parse_toml,
     render_config_toml,
+    render_from_config,
+    save_config,
+    with_rest_updates,
 )
 
 
@@ -147,3 +151,123 @@ def test_device_id_starting_with_digit_rejected() -> None:
     bad = DEFAULT_TOML.replace('device_id = "pi_bin"', 'device_id = "1pi"')
     with pytest.raises(ValueError, match="device_id"):
         parse_toml(bad)
+
+
+# --- transport_mode + [rest] section ------------------------------------------
+
+
+def test_default_transport_mode_is_mqtt() -> None:
+    cfg = parse_toml(DEFAULT_TOML)
+    assert cfg.transport_mode == "mqtt"
+    # Empty defaults make the [rest] section harmless until user opts in.
+    assert cfg.rest.server_url == ""
+    assert cfg.rest.device_token == ""
+    assert cfg.rest.pairing_code == ""
+    assert cfg.rest.last_frame_etag == ""
+    assert cfg.rest.poll_interval_s == 60
+
+
+def test_unknown_transport_mode_rejected() -> None:
+    bad = DEFAULT_TOML.replace(
+        'transport_mode = "mqtt"', 'transport_mode = "carrier-pigeon"'
+    )
+    with pytest.raises(ValueError, match="transport_mode"):
+        parse_toml(bad)
+
+
+def test_rest_mode_requires_server_url() -> None:
+    bad = DEFAULT_TOML.replace('transport_mode = "mqtt"', 'transport_mode = "rest"')
+    with pytest.raises(ValueError, match="server_url"):
+        parse_toml(bad)
+
+
+def test_rest_mode_with_server_url_parses() -> None:
+    body = render_config_toml(
+        transport_mode="rest",
+        rest_server_url="http://tesserae.local:8765",
+        rest_pairing_code="ABC123",
+    )
+    cfg = parse_toml(body)
+    assert cfg.transport_mode == "rest"
+    assert cfg.rest.server_url == "http://tesserae.local:8765"
+    assert cfg.rest.pairing_code == "ABC123"
+
+
+def test_missing_transport_mode_defaults_to_mqtt() -> None:
+    # A config predating the REST split (no transport_mode key) keeps the
+    # MQTT behaviour without prompting the user to re-pair.
+    body = "\n".join(
+        line for line in DEFAULT_TOML.splitlines() if "transport_mode" not in line
+    ) + "\n"
+    cfg = parse_toml(body)
+    assert cfg.transport_mode == "mqtt"
+
+
+def test_negative_poll_interval_rejected() -> None:
+    body = render_config_toml(rest_poll_interval_s=60)
+    bad = body.replace("poll_interval_s = 60", "poll_interval_s = 0")
+    with pytest.raises(ValueError, match="poll_interval_s"):
+        parse_toml(bad)
+
+
+# --- save_config round-trip ---------------------------------------------------
+
+
+def test_save_config_round_trips_rest_state(tmp_path: Path) -> None:
+    """The daemon persists device_token + last_frame_etag through save_config;
+    re-loading must give back the exact same values (no quote escaping bugs)."""
+    path = tmp_path / "config.toml"
+    body = render_config_toml(
+        transport_mode="rest",
+        rest_server_url="http://srv:8765",
+    )
+    path.write_text(body, encoding="utf-8")
+    cfg = parse_toml(path.read_text())
+
+    updated = with_rest_updates(
+        cfg,
+        device_token="TOK_xyz123",
+        last_frame_etag='"sha-deadbeef"',  # ETag quotes must survive
+    )
+    save_config(updated, path)
+
+    reloaded = parse_toml(path.read_text())
+    assert reloaded.rest.device_token == "TOK_xyz123"
+    assert reloaded.rest.last_frame_etag == '"sha-deadbeef"'
+    # All other fields preserved.
+    assert reloaded.mqtt.device_id == cfg.mqtt.device_id
+    assert reloaded.panel.model == cfg.panel.model
+
+
+def test_save_config_atomic_writes_via_temp_file(tmp_path: Path) -> None:
+    """A save with a non-writable parent dir doesn't leave a stray .tmp."""
+    path = tmp_path / "config.toml"
+    body = render_config_toml()
+    path.write_text(body, encoding="utf-8")
+    cfg = parse_toml(path.read_text())
+    save_config(cfg, path)
+    # Only the canonical file remains; no .tmp leftovers.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.toml"]
+
+
+def test_render_from_config_round_trip() -> None:
+    cfg = Config(
+        mqtt=parse_toml(DEFAULT_TOML).mqtt,
+        panel=parse_toml(DEFAULT_TOML).panel,
+        http=parse_toml(DEFAULT_TOML).http,
+        logging=parse_toml(DEFAULT_TOML).logging,
+        transport_mode="rest",
+        rest=RestConfig(
+            server_url="http://h:1",
+            device_token="t",
+            pairing_code="",
+            last_frame_etag="e",
+            poll_interval_s=120,
+        ),
+    )
+    body = render_from_config(cfg)
+    rt = parse_toml(body)
+    assert rt.transport_mode == "rest"
+    assert rt.rest.server_url == "http://h:1"
+    assert rt.rest.device_token == "t"
+    assert rt.rest.poll_interval_s == 120
