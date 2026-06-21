@@ -105,6 +105,8 @@ This expects `tesserae-pi-bin-client` to already be on `PATH` at
 Defaults live at `~/.config/tesserae-pi-bin-client/config.toml`:
 
 ```toml
+transport_mode = "mqtt"  # mqtt | rest
+
 [mqtt]
 host = "192.168.1.10"
 port = 1883
@@ -113,6 +115,13 @@ password = ""        # optional
 client_id = "pi-impression-1"
 device_id = "pi_bin" # MQTT topic prefix — tesserae/<device_id>/...
 keepalive = 60
+
+[rest]
+server_url = ""           # e.g. http://tesserae.local:8765 (rest mode only)
+device_token = ""         # auto-populated after pair/discover
+pairing_code = ""         # single-use; wiped after first successful register
+last_frame_etag = ""      # auto-populated for If-None-Match short-circuit
+poll_interval_s = 60      # fallback wake interval if server omits next_poll_s
 
 [panel]
 model = "inky_13_3"  # inky_4 | inky_5_7 | inky_7_3 | inky_13_3
@@ -126,6 +135,50 @@ level = "INFO"
 ```
 
 Pass `--config /path/to/config.toml` to override.
+
+## Transports
+
+The client speaks one of two transports, selected by `transport_mode`:
+
+- **`mqtt`** (default) — subscribes to a broker and reacts to retained frame
+  announcements. Stays connected; pushes are near-instant. Requires a
+  broker on the LAN.
+- **`rest`** — polls the Tesserae server's `/api/v1/` directly. No broker
+  needed; one round-trip per wake cycle (`GET /frame` + `POST /status`).
+  The server's response sets the next sleep interval, so wake cadence
+  follows the active composition.
+
+Switching mode is a config-file edit + `sudo systemctl restart tesserae-pi-bin-client`.
+Existing `config.toml` files without `transport_mode` continue to default
+to `mqtt`.
+
+### REST mode setup
+
+1. Edit `~/.config/tesserae-pi-bin-client/config.toml`:
+   ```toml
+   transport_mode = "rest"
+   [rest]
+   server_url = "http://tesserae.local:8765"
+   ```
+2. **Recommended path (zero typing on the device):** start the daemon
+   and click **Register** on the discovered row in the server's
+   Settings → Devices page. The daemon's next `POST /device/discover`
+   claims the token by MAC match; you'll see "registered via discover"
+   in the journal.
+3. **Strict path (per-device admin approval):** generate a 6-digit
+   pairing code in Settings → Devices, then either:
+   - put it in `[rest].pairing_code` in `config.toml`, or
+   - pass it once via the CLI:
+     ```bash
+     tesserae-pi-bin-client --pair 123456
+     ```
+   `--pair` overrides whatever is in the config for this run only. The
+   code is single-use; after a successful register the daemon wipes it
+   and saves the issued `device_token`.
+
+If a 401 ever comes back from the server (token revoked or wiped from
+the server side), the daemon clears the local `device_token` and exits.
+Restart with `--pair` or rely on the discover loop to recover.
 
 ## MQTT contract
 
@@ -171,6 +224,58 @@ Topic `tesserae/<device_id>/status`:
 
 Heartbeat publishes every 60 s and immediately on state change. A retained
 last-will of `{"state":"offline"}` is set on connect.
+
+## REST contract
+
+Active when `transport_mode = "rest"`. All endpoints sit under `/api/v1/`
+on the configured `server_url`. The client sends both `Authorization:
+Bearer <token>` and `X-Tesserae-Token: <token>` on every authenticated
+call (cheap belt-and-suspenders against header-stripping middleboxes).
+
+### First boot — `POST /device/discover`
+
+Body: `{device_id, kind: "pi_bin_client", panel_w, panel_h, fw_version, mac}`.
+
+The server responds in one of two shapes:
+
+- `{registered: false, retry_after_s: 30}` — the device shows up in
+  Settings → Devices "Discovered" strip; sleep `retry_after_s` and poll
+  again.
+- `{registered: true, device_token, device_id, server_time}` — admin
+  clicked Register; persist the token, **adopt `device_id` from the
+  response** (it may differ from what was sent — using the wrong one
+  gives 403 on subsequent calls), then enter the wake loop.
+
+### Alternative first boot — `POST /device/register`
+
+Header: `X-Pairing-Code: <6-digit-code>`, body same as discover.
+Returns `201 + {device_token, device_id, reused_existing}` on success;
+`403` on bad/expired code (process exits — generate a fresh code);
+`429 + Retry-After` if rate-limited.
+
+### Wake loop — `GET /device/<id>/frame`
+
+Header: `Authorization: Bearer <token>`, optional `If-None-Match:
+<last_frame_etag>`.
+
+- `200` + JSON `{url, format, panel_w, panel_h, render_id, renderer_id}`
+  and `ETag: "<sha256>"` — download `url`, paint, save the new ETag.
+- `304` — composition unchanged; skip download + paint.
+- `204` — server hasn't rendered anything for this device yet.
+- `401` — token invalid; the daemon wipes `device_token` from
+  `config.toml` and exits.
+
+### Wake loop — `POST /device/<id>/status`
+
+Body: the same heartbeat shape as the MQTT retained `tesserae/<device_id>/status`
+payload (`{state, last_paint_at, last_error, last_digest, uptime_s, fw_version,
+panel, kind, panel_w, panel_h, ip}`) — battery / RSSI / wake_reason fields
+are absent on Pi.
+
+Response: `{status, config: {sleep_interval_s?}, next_poll_s?,
+server_time}`. `config.sleep_interval_s` is durable (persisted to
+`[rest].poll_interval_s` for future cycles), `next_poll_s` is one-shot
+(only the next sleep duration). Both clamp to `[30s, 7d]`.
 
 ## Wire format (the `.bin` files)
 
@@ -254,10 +359,27 @@ or a real broker.
   ```
 - **Panel stays blank, no logs.** Is the daemon running? `systemctl status
   tesserae-pi-bin-client`. Check `journalctl -u tesserae-pi-bin-client`.
-- **Daemon connects but never paints.** Confirm the broker is reachable from
-  the Pi (`mosquitto_sub -h <host> -t 'tesserae/<device_id>/frame/bin'`, or
-  `'tesserae/#'` to watch every device). Confirm the URL in a message is
+- **Daemon connects but never paints (MQTT).** Confirm the broker is
+  reachable from the Pi (`mosquitto_sub -h <host> -t 'tesserae/<device_id>/frame/bin'`,
+  or `'tesserae/#'` to watch every device). Confirm the URL in a message is
   reachable from the Pi (`curl -I <url>`).
+- **REST: `not registered yet — admin needs to click Register on the server`
+  loops forever.** The daemon's `POST /device/discover` is reaching the
+  server, but no one has clicked Register in Settings → Devices. Either
+  click it (the next discover poll claims the token) or mint a 6-digit
+  pairing code and rerun with `--pair <code>` for the strict path.
+- **REST: `frame GET 401: token invalid`.** The server revoked the device or
+  the local `device_token` is corrupt. The daemon wipes it from
+  `config.toml` and exits — re-pair (`--pair`) or wait for the discover
+  loop to re-claim.
+- **REST: `frame GET 403: token not valid for this device`.** The local
+  `[mqtt].device_id` no longer matches the server's canonical id (admin
+  renamed the device). The discover-claim flow normally adopts the new
+  id; if you got here, re-pair to refresh both id and token.
+- **REST: log shows `server_time skew=...s; check NTP`.** The Pi's clock
+  has drifted more than a minute from the server's. We don't `settimeofday`
+  (NTP owns that on Linux); check that `chronyd`/`systemd-timesyncd` is
+  running.
 - **"frame is N bytes; expected M" errors.** The configured `panel.model`
   doesn't match the panel that Tesserae is rendering for. Make them agree.
 - **Permission errors opening SPI.** The user running the daemon needs
