@@ -16,6 +16,10 @@ dependencies = [
     # expects. inky already pulls numpy transitively; we list it explicitly
     # since we import it directly.
     "numpy>=1.24",
+    # transports/rest.py uses requests for HTTP polling. inky already pulls
+    # it transitively today, but list it explicitly so the dep tree doesn't
+    # depend on inky's chain to satisfy a module we import directly.
+    "requests>=2.31",
     # PINNED — paint.py knows the shape of inky's panel.buf and counts on
     # show() handling per-driver orientation + dual-controller plumbing.
     # Bumping this requires re-running --paint-test on real hardware.

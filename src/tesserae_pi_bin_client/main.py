@@ -5,14 +5,12 @@ import logging
 import signal
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import DEFAULT_CONFIG_PATH, Config, load_config
-from .heartbeat import Heartbeat, Status, _primary_ip, status_topic
-from .mqtt_loop import FrameDispatcher, MessageHandler, frame_topic, make_mqtt_loop
+from .config import DEFAULT_CONFIG_PATH, Config, load_config, with_rest_updates
+from .heartbeat import Status, _primary_ip
 from .paint import auto_panel, detected_model_or, paint
 from .panels import PANEL_DIMS, buffer_size
 from .unpack import pack
@@ -89,98 +87,74 @@ def _do_paint_test(config: Config) -> int:
     return 0
 
 
-def _do_run(config: Config) -> int:
+def _build_status_and_painter(config: Config) -> tuple[Status, Any, Any]:
+    """Shared by both transports: detect the panel, pre-fill discovery
+    fields on Status, return (status, panel, paint_fn)."""
     status = Status(panel=config.panel.model)
     panel = _detect_panel()
     status.panel = detected_model_or(panel, config.panel.model)
     # PANEL_DIMS[name] is (W, H) in the orientation Tesserae renders into and
     # the orientation inky.show() consumes after applying the per-driver
     # rotation — i.e. what the user actually sees on the panel. Surface those
-    # in the heartbeat so the server's one-click Register pre-fills correctly.
+    # in the heartbeat / discovery body so the server pre-fills correctly.
     status.panel_w, status.panel_h = PANEL_DIMS[status.panel]
-    # Resolved once at startup — neither value changes between heartbeats.
+    # Resolved once at startup — neither value changes between cycles.
     status.ip = _primary_ip()
-
-    resolved_frame_topic = frame_topic(config.mqtt.device_id)
-    resolved_status_topic = status_topic(config.mqtt.device_id)
 
     def paint_fn(packed: bytes, model: str) -> None:
         paint(panel, packed, model)
 
-    client_holder: dict[str, Any] = {}
+    return status, panel, paint_fn
 
-    class _ClientPublisher:
-        def publish(
-            self,
-            topic: str,
-            payload: bytes,
-            qos: int = 0,
-            retain: bool = False,
-        ) -> Any:
-            client = client_holder.get("client")
-            if client is None:
-                return None
-            return client.publish(topic, payload, qos=qos, retain=retain)
 
-    heartbeat = Heartbeat(
-        status=status,
-        publisher=_ClientPublisher(),
-        status_topic=resolved_status_topic,
-    )
-    dispatcher = FrameDispatcher(
-        config=config, paint_fn=paint_fn, status=status, heartbeat=heartbeat
-    )
-    handler = MessageHandler(
-        dispatcher=dispatcher,
-        status=status,
-        heartbeat=heartbeat,
-        frame_topic=resolved_frame_topic,
-    )
-    client = make_mqtt_loop(
-        config=config,
-        handler=handler,
-        frame_topic=resolved_frame_topic,
-        status_topic=resolved_status_topic,
-    )
-    client_holder["client"] = client
+def _do_run(config: Config, config_path: Path) -> int:
+    """Dispatch to the configured transport's wake loop."""
+    status, _panel, paint_fn = _build_status_and_painter(config)
 
     shutdown = threading.Event()
 
-    def _signal_handler(signum: int, frame: Any) -> None:
+    def _signal_handler(signum: int, _frame: Any) -> None:
         log.info("signal %d received; shutting down", signum)
         shutdown.set()
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
-    dispatcher.start()
-    heartbeat.start()
-    log.info(
-        "connecting to mqtt %s:%d as %s",
-        config.mqtt.host,
-        config.mqtt.port,
-        config.mqtt.client_id,
-    )
-    client.connect_async(config.mqtt.host, config.mqtt.port, config.mqtt.keepalive)
-    client.loop_start()
+    if config.transport_mode == "rest":
+        log.info("transport_mode=rest; using HTTP polling against %s", config.rest.server_url)
+        from .transports import rest
 
-    try:
-        while not shutdown.is_set():
-            time.sleep(0.5)
-    finally:
-        log.info("publishing offline and disconnecting")
-        try:
-            heartbeat.publish_offline()
-        except Exception:  # noqa: BLE001
-            log.exception("failed publishing offline status")
-        heartbeat.stop()
-        dispatcher.stop()
-        try:
-            client.loop_stop()
-            client.disconnect()
-        except Exception:  # noqa: BLE001
-            log.exception("error during MQTT shutdown")
-    return 0
+        return rest.run(config, status, paint_fn, shutdown, config_path)
+
+    log.info("transport_mode=mqtt; using MQTT broker at %s:%d", config.mqtt.host, config.mqtt.port)
+    from .transports import mqtt
+
+    return mqtt.run(config, status, paint_fn, shutdown, config_path)
+
+
+def _apply_pair_flag(config: Config, pair_code: str, config_path: Path) -> Config:
+    """In-memory override: --pair beats whatever pairing_code was in config.
+
+    The new code is NOT persisted by this function — the REST claim flow
+    persists it implicitly by wiping it once the resulting device_token is
+    saved. If the user pre-empts the daemon (Ctrl-C before pairing
+    completes), the next run starts fresh and they re-supply --pair.
+    """
+    if config.transport_mode != "rest":
+        raise SystemExit(
+            "--pair only applies when transport_mode = 'rest' "
+            f"(current: {config.transport_mode!r})"
+        )
+    if config.rest.device_token:
+        log.warning(
+            "--pair ignored: a device_token is already saved at %s. "
+            "Wipe it (set device_token = \"\" in [rest]) and re-run to re-pair.",
+            config_path,
+        )
+        return config
+    if config.rest.pairing_code and config.rest.pairing_code != pair_code:
+        log.info("--pair overrides config.rest.pairing_code for this run")
+    return with_rest_updates(config, pairing_code=pair_code)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -199,7 +173,15 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--paint-test",
         action="store_true",
-        help="paint a six-colour stripe pattern and exit (no MQTT)",
+        help="paint a six-colour stripe pattern and exit (no MQTT/REST)",
+    )
+    parser.add_argument(
+        "--pair",
+        metavar="CODE",
+        default=None,
+        help="REST mode only: present this pairing code to the server on first "
+        "run. Overrides [rest].pairing_code from config. Ignored if a "
+        "device_token is already saved.",
     )
     args = parser.parse_args(argv)
 
@@ -208,7 +190,9 @@ def run(argv: list[str] | None = None) -> int:
 
     if args.paint_test:
         return _do_paint_test(config)
-    return _do_run(config)
+    if args.pair is not None:
+        config = _apply_pair_flag(config, args.pair, args.config)
+    return _do_run(config, args.config)
 
 
 if __name__ == "__main__":  # pragma: no cover
