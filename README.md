@@ -1,4 +1,4 @@
-# tesserae-pi-bin-client
+# tesserae-device-pi-bin
 
 A headless Raspberry Pi daemon that subscribes to a [Tesserae] server over MQTT,
 downloads pre-packed 4-bpp `.bin` frames, and paints them onto a Pimoroni
@@ -33,8 +33,8 @@ One command from a fresh Raspberry Pi OS Bookworm image. Run it **as your
 normal user** (not via sudo — the script invokes sudo internally where needed):
 
 ```bash
-git clone https://github.com/dmellok/tesserae-pi-bin-client.git
-cd tesserae-pi-bin-client
+git clone https://github.com/dmellok/tesserae-device-pi-bin.git
+cd tesserae-device-pi-bin
 ./scripts/install.sh
 ```
 
